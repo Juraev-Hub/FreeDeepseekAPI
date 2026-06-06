@@ -714,21 +714,27 @@ function sendAnthropicStream(res, openaiResp) {
     const choice = openaiResp.choices[0];
     const msg = choice.message || {};
     const message = toAnthropicResponse(openaiResp);
+    const hasToolCalls = msg.tool_calls && msg.tool_calls.length > 0;
     writeSse(res, 'message_start', { type: 'message_start', message: { ...message, content: [] } });
-    if (msg.reasoning_content) {
-        writeSse(res, 'content_block_start', { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } });
-        writeSse(res, 'content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: `[reasoning]\n${msg.reasoning_content}\n[/reasoning]\n` } });
-        writeSse(res, 'content_block_stop', { type: 'content_block_stop', index: 0 });
-    }
-    const offset = msg.reasoning_content ? 1 : 0;
-    if (msg.tool_calls && msg.tool_calls.length > 0) {
+
+    // Anthropic-compatible clients expect a tool turn to be made of tool_use
+    // content blocks. If we emit DeepSeek reasoning as a text block before the
+    // tool_use block, some agents treat the turn as a normal text answer and do
+    // not execute the tool. Keep tool streaming clean: tool_use blocks only.
+    if (hasToolCalls) {
         msg.tool_calls.forEach((tc, i) => {
-            writeSse(res, 'content_block_start', { type: 'content_block_start', index: i + offset, content_block: { type: 'tool_use', id: tc.id, name: tc.function.name, input: {} } });
-            writeSse(res, 'content_block_delta', { type: 'content_block_delta', index: i + offset, delta: { type: 'input_json_delta', partial_json: tc.function.arguments || '{}' } });
-            writeSse(res, 'content_block_stop', { type: 'content_block_stop', index: i + offset });
+            writeSse(res, 'content_block_start', { type: 'content_block_start', index: i, content_block: { type: 'tool_use', id: tc.id, name: tc.function.name, input: {} } });
+            writeSse(res, 'content_block_delta', { type: 'content_block_delta', index: i, delta: { type: 'input_json_delta', partial_json: tc.function.arguments || '{}' } });
+            writeSse(res, 'content_block_stop', { type: 'content_block_stop', index: i });
         });
         writeSse(res, 'message_delta', { type: 'message_delta', delta: { stop_reason: 'tool_use', stop_sequence: null }, usage: message.usage });
     } else {
+        if (msg.reasoning_content) {
+            writeSse(res, 'content_block_start', { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } });
+            writeSse(res, 'content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: `[reasoning]\n${msg.reasoning_content}\n[/reasoning]\n` } });
+            writeSse(res, 'content_block_stop', { type: 'content_block_stop', index: 0 });
+        }
+        const offset = msg.reasoning_content ? 1 : 0;
         writeSse(res, 'content_block_start', { type: 'content_block_start', index: offset, content_block: { type: 'text', text: '' } });
         const text = msg.content || '';
         for (let i = 0; i < text.length; i += 80) {

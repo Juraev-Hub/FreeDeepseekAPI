@@ -94,6 +94,14 @@ test('6 Responses tool calling parse', async () => {
   return `${item.name} ${item.arguments}`;
 });
 
+test('7 Anthropic streaming tool calling stays tool-only', async () => {
+  const r = await post('/v1/messages', { model: MODEL, max_tokens: 256, metadata: { user_id: `smoke-tool-stream-${Date.now()}` }, messages: [{ role: 'user', content: 'Create a tiny script file named test-deepseek.py that prints the current date and time. Use the available tool. Output only the tool request.' }], tools: [{ name: 'write_file', description: 'Write a local file. Use this when the user asks you to create a file.', input_schema: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' } }, required: ['path', 'content'] } }], stream: true }, 180000);
+  assert(r.ok, `HTTP ${r.status}: ${r.text}`);
+  assert(/"type":"tool_use"/.test(r.text), `stream has no tool_use block: ${summarizeText(r.text)}`);
+  assert(!/"type":"text_delta"/.test(r.text), `tool stream included text deltas before/during tool_use: ${summarizeText(r.text)}`);
+  return 'tool_use block without text deltas';
+});
+
 let failed = 0;
 for (const t of tests) {
   const start = Date.now();
